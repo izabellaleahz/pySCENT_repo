@@ -261,7 +261,7 @@ def extract_gene_peak_data(
         gene_expr = gene_cache.pop(gene_idx)
         gene_cache[gene_idx] = gene_expr  # mark as recently used
     else:
-        gene_expr = rna[gene_idx].to_dense().squeeze()[celltype_mask]
+        gene_expr = rna[:, gene_idx].to_dense().squeeze()[celltype_mask]
         if gene_cache is not None:
             gene_cache[gene_idx] = gene_expr
             if gene_cache_max is not None and len(gene_cache) > gene_cache_max:
@@ -271,7 +271,7 @@ def extract_gene_peak_data(
         peak_acc = peak_cache.pop(peak_idx)
         peak_cache[peak_idx] = peak_acc
     else:
-        peak_acc = atac[peak_idx].to_dense().squeeze()[celltype_mask]
+        peak_acc = atac[:, peak_idx].to_dense().squeeze()[celltype_mask]
         peak_acc = (peak_acc > 0).float()
         if peak_cache is not None:
             peak_cache[peak_idx] = peak_acc

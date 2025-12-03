@@ -238,45 +238,50 @@ def scent_algorithm_gpu(
 
 def scent_multi_celltype_gpu(
     data: Dict,
-    celltypes: List[str],
+    celltypes: Optional[List[str]] = None,
     celltype_col: str = 'ct',
     covariates: Optional[List[str]] = None,
     device: str = 'cuda',
     verbose: bool = True,
     regression_type: str = 'poisson',
     bootstrap_counts: Optional[list] = None,
-    bootstrap_thresholds: Optional[list] = None,
-    save_incremental: bool = False,
-    incremental_output_dir: Optional[str] = None,
-    dataset_name: Optional[str] = None,
-    fdr_threshold: float = 0.10
+    bootstrap_thresholds: Optional[list] = None
 ) -> pd.DataFrame:
     """
-    Run SCENT for multiple cell types and combine results
-    
+    Run SCENT for multiple cell types and combine results.
+    IMPORTANT: FDR is calculated globally across ALL cell types (per SCENT paper).
+
     Args:
         data: Data dictionary from load_scent_data
-        celltypes: List of cell types to analyze
+        celltypes: List of cell types to analyze (default: all available)
         celltype_col: Column name for cell type
         covariates: List of covariate names
         device: 'cuda' or 'cpu'
         verbose: Print progress
-        save_incremental: If True, save results after each cell type completes
-        incremental_output_dir: Directory to save incremental results
-        dataset_name: Dataset name for incremental file naming
-        fdr_threshold: FDR threshold for incremental hits
-    
+        regression_type: 'poisson' or 'negbin'
+        bootstrap_counts: Custom bootstrap counts for adaptive bootstrapping
+        bootstrap_thresholds: Custom p-value thresholds for adaptive bootstrapping
+
     Returns:
-        Combined DataFrame with results for all cell types
+        Combined DataFrame with results for all cell types (FDR calculated globally)
     """
+    # Get available cell types if not specified
+    if celltypes is None:
+        celltypes = data['metadata'][celltype_col].unique().tolist()
+        if verbose:
+            print(f"Analyzing all available cell types: {celltypes}")
+
+    if verbose:
+        print(f"\n{'='*80}")
+        print(f"SCENT GPU: Analyzing {len(celltypes)} cell types")
+        print(f"{'='*80}")
+
     all_results = []
-    
+
     for ct in celltypes:
         if verbose:
-            print(f"\n{'='*80}")
-            print(f"Processing cell type: {ct}")
-            print(f"{'='*80}")
-        
+            print(f"\n--- Processing cell type: {ct} ---")
+
         ct_results = scent_algorithm_gpu(
             data, ct, celltype_col, covariates,
             device=device, verbose=verbose,
@@ -284,42 +289,34 @@ def scent_multi_celltype_gpu(
             bootstrap_counts=bootstrap_counts,
             bootstrap_thresholds=bootstrap_thresholds
         )
-        
+
         if len(ct_results) > 0:
             all_results.append(ct_results)
-            
-            # Save incrementally if requested
-            if save_incremental and incremental_output_dir is not None:
-                from pathlib import Path
-                import gzip
-                
-                output_dir = Path(incremental_output_dir)
-                output_dir.mkdir(parents=True, exist_ok=True)
-                
-                # Replace spaces in cell type name for filename
-                ct_safe = ct.replace(' ', '_').replace('/', '-')
-                prefix = f'{dataset_name}_{ct_safe}' if dataset_name else ct_safe
-                
-                # Save all results WITHOUT FDR (FDR will be calculated globally at the end)
-                # This matches R SCENT behavior: FDR across all cell types, not per-celltype
-                all_file = output_dir / f'{prefix}_all_results_incremental.tsv.gz'
-                with gzip.open(all_file, 'wt') as f:
-                    ct_results.to_csv(f, sep='\t', index=False)
-                
-                if verbose:
-                    print(f"  ✓ Incremental save: {len(ct_results)} pairs (FDR will be calculated globally)")
-    
+            if verbose:
+                print(f"  ✓ {ct}: {len(ct_results)} tests completed")
+
     # Combine all results
     if len(all_results) == 0:
+        if verbose:
+            print("\n⚠ No results for any cell type")
         return pd.DataFrame()
-    
+
     combined = pd.concat(all_results, ignore_index=True)
-    
+
+    # Calculate FDR GLOBALLY across all cell types (critical for SCENT)
     if verbose:
         print(f"\n{'='*80}")
-        print(f"Total results: {len(combined)} tests across {len(celltypes)} cell types")
+        print("CALCULATING GLOBAL FDR")
+        print("IMPORTANT: FDR calculated across ALL cell types and comparisons")
         print(f"{'='*80}")
-    
+
+    combined = calculate_fdr(combined)
+
+    if verbose:
+        n_sig = (combined['FDR'] <= 0.10).sum()
+        print(f"✓ Global FDR calculated: {len(combined)} total tests, {n_sig} significant hits (FDR ≤ 0.10)")
+        print(f"{'='*80}")
+
     return combined
 
 
